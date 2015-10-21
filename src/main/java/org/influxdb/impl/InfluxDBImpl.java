@@ -19,6 +19,7 @@ import com.google.common.collect.Lists;
 import com.squareup.okhttp.OkHttpClient;
 
 import retrofit.RestAdapter;
+import retrofit.client.ApacheClient;
 import retrofit.client.Client;
 import retrofit.client.Header;
 import retrofit.client.OkClient;
@@ -57,7 +58,7 @@ public class InfluxDBImpl implements InfluxDB {
 		super();
 		this.username = username;
 		this.password = password;
-		Client client = new OkClient(new OkHttpClient());
+		Client client = new ApacheClient();
 		restAdapter = new RestAdapter.Builder()
 				.setEndpoint(url)
 				.setErrorHandler(new InfluxDBErrorHandler())
