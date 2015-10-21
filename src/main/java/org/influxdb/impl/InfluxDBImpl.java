@@ -11,8 +11,8 @@ import org.influxdb.dto.Point;
 import org.influxdb.dto.Pong;
 import org.influxdb.dto.Query;
 import org.influxdb.dto.QueryResult;
-import org.influxdb.impl.BatchProcessor.BufferFailBehaviour;
 
+import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.Lists;
@@ -66,6 +66,10 @@ public class InfluxDBImpl implements InfluxDB {
 				.build();
 		influxDBService = restAdapter.create(InfluxDBService.class);
 	}
+	
+	protected BatchProcessor getBatchProcessor() {
+		return batchProcessor;
+	}
 
 	@Override
 	public InfluxDB setLogLevel(final LogLevel logLevel) {
@@ -90,7 +94,7 @@ public class InfluxDBImpl implements InfluxDB {
 	}
 
 	public InfluxDB enableBatch(
-			final int capacity,
+			final Integer capacity,
 			final int actions,
 			final int flushDuration,
 			final TimeUnit flushDurationTimeUnit,
@@ -261,4 +265,24 @@ public class InfluxDBImpl implements InfluxDB {
 		return databases;
 	}
 
+	public int getBufferedCount() {
+		if (batchEnabled.get()) {
+			return batchProcessor.getBufferedCount();
+		}
+		
+		return 0;
+	}
+	
+	@Override
+	public Optional<Point> peekFirstBuffered() {
+		if (batchEnabled.get()) {
+			Optional<Point> point = batchProcessor.peekFirstBuffered();
+			
+			if (point.isPresent()) {
+				return Optional.of(point.get());
+			}
+		}
+		
+		return Optional.absent();
+	}
 }
