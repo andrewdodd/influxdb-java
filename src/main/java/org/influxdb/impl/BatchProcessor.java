@@ -1,8 +1,10 @@
 package org.influxdb.impl;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -10,9 +12,10 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import org.influxdb.InfluxDB;
-import org.influxdb.dto.BatchPoints;
+import org.influxdb.InfluxDB.ConsistencyLevel;
 import org.influxdb.dto.Point;
 
+import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Maps;
 
@@ -82,35 +85,41 @@ public class BatchProcessor {
 		 * @return the BatchProcessor instance.
 		 */
 		public BatchProcessor build() {
-			Preconditions.checkNotNull(this.actions, "actions may not be null");
-			Preconditions.checkNotNull(this.flushInterval, "flushInterval may not be null");
-			Preconditions.checkNotNull(this.flushIntervalUnit, "flushIntervalUnit may not be null");
-			return new BatchProcessor(this.influxDB, this.actions, this.flushIntervalUnit, this.flushInterval);
+			Preconditions.checkNotNull(actions, "actions may not be null");
+			Preconditions.checkNotNull(flushInterval, "flushInterval may not be null");
+			Preconditions.checkNotNull(flushIntervalUnit, "flushIntervalUnit may not be null");
+			return new BatchProcessor(influxDB, actions, flushIntervalUnit, flushInterval);
 		}
 	}
 
 	static class BatchEntry {
 		private final Point point;
-		private final String db;
-		private final String rp;
+		private final String database;
+		private final String retentionPolicy;
+		private final ConsistencyLevel consistencyLevel;
 
-		public BatchEntry(final Point point, final String db, final String rp) {
+		public BatchEntry(final Point point, final String database, ConsistencyLevel consistencyLevel, final String retentionPolicy) {
 			super();
 			this.point = point;
-			this.db = db;
-			this.rp = rp;
+			this.database = database;
+			this.retentionPolicy = retentionPolicy;
+			this.consistencyLevel = consistencyLevel;
 		}
 
 		public Point getPoint() {
-			return this.point;
+			return point;
 		}
 
-		public String getDb() {
-			return this.db;
+		public String getDatabase() {
+			return database;
 		}
 
-		public String getRp() {
-			return this.rp;
+		public String getRetentionPolicy() {
+			return retentionPolicy;
+		}
+		
+		public ConsistencyLevel getConsistencyLevel() {
+			return consistencyLevel;
 		}
 	}
 
@@ -134,7 +143,7 @@ public class BatchProcessor {
 		this.flushInterval = flushInterval;
 
 		// Flush at specified Rate
-		this.scheduler.scheduleAtFixedRate(new Runnable() {
+		scheduler.scheduleAtFixedRate(new Runnable() {
 			@Override
 			public void run() {
 				write();
@@ -144,26 +153,27 @@ public class BatchProcessor {
 	}
 
 	void write() {
-		if (this.queue.isEmpty()) {
+		if (queue.isEmpty()) {
 			return;
 		}
 
-		Map<String, BatchPoints> databaseToBatchPoints = Maps.newHashMap();
-		List<BatchEntry> batchEntries = new ArrayList<BatchEntry>(this.queue.size());
-		this.queue.drainTo(batchEntries);
+		Map<BatchCommonFields, ArrayList<Point>> databaseToBatchPoints = new HashMap<BatchCommonFields, ArrayList<Point>>();
+		List<BatchEntry> batchEntries = new ArrayList<BatchEntry>(queue.size());
+		queue.drainTo(batchEntries);
 
 		for (BatchEntry batchEntry : batchEntries) {
-			String dbName = batchEntry.getDb();
-			if (!databaseToBatchPoints.containsKey(dbName)) {
-				BatchPoints batchPoints = BatchPoints.database(dbName).retentionPolicy(batchEntry.getRp()).build();
-				databaseToBatchPoints.put(dbName, batchPoints);
+			BatchCommonFields common = BatchCommonFields.fromEntry(batchEntry);
+			
+			if (!databaseToBatchPoints.containsKey(common)) {
+				databaseToBatchPoints.put(common, new ArrayList<Point>());
 			}
-			Point point = batchEntry.getPoint();
-			databaseToBatchPoints.get(dbName).point(point);
+			databaseToBatchPoints.get(common).add(batchEntry.getPoint());
 		}
 
-		for (BatchPoints batchPoints : databaseToBatchPoints.values()) {
-			BatchProcessor.this.influxDB.write(batchPoints);
+		for (Entry<BatchCommonFields, ArrayList<Point>> entry : databaseToBatchPoints.entrySet()) {
+			BatchCommonFields common = entry.getKey();
+			List<Point> points = entry.getValue();
+			influxDB.write(common.database, common.retentionPolicy, common.consistencyLevel, points);
 		}
 	}
 
@@ -174,8 +184,8 @@ public class BatchProcessor {
 	 *            the batchEntry to write to the cache.
 	 */
 	void put(final BatchEntry batchEntry) {
-		this.queue.add(batchEntry);
-		if (this.queue.size() >= this.actions) {
+		queue.add(batchEntry);
+		if (queue.size() >= actions) {
 			write();
 		}
 	}
@@ -186,8 +196,47 @@ public class BatchProcessor {
 	 *
 	 */
 	void flush() {
-		this.write();
-		this.scheduler.shutdown();
+		write();
+		scheduler.shutdown();
 	}
 
+	private static class BatchCommonFields {
+		private final String database;
+		private final String retentionPolicy;
+		private final ConsistencyLevel consistencyLevel;
+
+		public BatchCommonFields(final String database, final String retentionPolicy,
+				final ConsistencyLevel consistencyLevel) {
+			this.database = database;
+			this.retentionPolicy = retentionPolicy;
+			this.consistencyLevel = consistencyLevel;
+		}
+
+		@Override
+		public int hashCode() {
+			return Objects.hashCode(database, retentionPolicy, consistencyLevel);
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			if (this == obj)
+				return true;
+			if (obj == null)
+				return false;
+			if (getClass() != obj.getClass())
+				return false;
+			BatchCommonFields other = (BatchCommonFields) obj;
+
+			return (Objects.equal(database, other.database)
+					&& Objects.equal(retentionPolicy, other.retentionPolicy)
+					&& Objects.equal(consistencyLevel, other.consistencyLevel));
+		}
+		
+		public static BatchCommonFields fromEntry(BatchEntry batchEntry) {
+			return new BatchCommonFields(batchEntry.getDatabase(),
+					batchEntry.getRetentionPolicy(), batchEntry.getConsistencyLevel());
+		}
+
+
+	}
 }

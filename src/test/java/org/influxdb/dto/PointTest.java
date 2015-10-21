@@ -6,10 +6,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.assertj.core.util.Lists;
 import org.testng.Assert;
 import org.testng.annotations.Test;
-
-import jersey.repackaged.com.google.common.collect.Lists;
 
 /**
  * Test for the Point DTO.
@@ -67,21 +66,16 @@ public class PointTest {
 		Assert.assertEquals(point.lineProtocol().toString(), "test a=1.0 1000000");
 
 		point = Point.measurement("test").time(1, TimeUnit.NANOSECONDS).field("a", 1).build();
-		BatchPoints batchPoints = BatchPoints.database("db").point(point).build();
-		Assert.assertEquals(batchPoints.lineProtocol(), "test a=1.0 1\n");
+		Assert.assertEquals(Point.toLineProtocol(Lists.newArrayList(point)), "test a=1.0 1\n");
 
 		point = Point.measurement("test").time(1, TimeUnit.MICROSECONDS).field("a", 1).build();
-		batchPoints = BatchPoints.database("db").point(point).build();
-		Assert.assertEquals(batchPoints.lineProtocol(), "test a=1.0 1000\n");
+		Assert.assertEquals(Point.toLineProtocol(Lists.newArrayList(point)), "test a=1.0 1000\n");
 
 		point = Point.measurement("test").time(1, TimeUnit.MILLISECONDS).field("a", 1).build();
-		batchPoints = BatchPoints.database("db").point(point).build();
-		Assert.assertEquals(batchPoints.lineProtocol(), "test a=1.0 1000000\n");
+		Assert.assertEquals(Point.toLineProtocol(Lists.newArrayList(point)), "test a=1.0 1000000\n");
 
 		point = Point.measurement("test").field("a", 1).time(1, TimeUnit.MILLISECONDS).build();
-		batchPoints = BatchPoints.database("db").build();
-		batchPoints = batchPoints.point(point);
-		Assert.assertEquals(batchPoints.lineProtocol(), "test a=1.0 1000000\n");
+		Assert.assertEquals(Point.toLineProtocol(Lists.newArrayList(point)), "test a=1.0 1000000\n");
 
 	}
 

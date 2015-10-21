@@ -16,11 +16,12 @@ import org.influxdb.impl.BatchProcessor.BatchEntry;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.Lists;
+import com.squareup.okhttp.OkHttpClient;
 
 import retrofit.RestAdapter;
-import retrofit.client.ApacheClient;
 import retrofit.client.Client;
 import retrofit.client.Header;
+import retrofit.client.OkClient;
 import retrofit.client.Response;
 import retrofit.mime.TypedString;
 
@@ -56,29 +57,29 @@ public class InfluxDBImpl implements InfluxDB {
 		super();
 		this.username = username;
 		this.password = password;
-		Client client = new ApacheClient();
-		this.restAdapter = new RestAdapter.Builder()
+		Client client = new OkClient(new OkHttpClient());
+		restAdapter = new RestAdapter.Builder()
 				.setEndpoint(url)
 				.setErrorHandler(new InfluxDBErrorHandler())
 				.setClient(client)
 				.build();
-		this.influxDBService = this.restAdapter.create(InfluxDBService.class);
+		influxDBService = restAdapter.create(InfluxDBService.class);
 	}
 
 	@Override
 	public InfluxDB setLogLevel(final LogLevel logLevel) {
 		switch (logLevel) {
 		case NONE:
-			this.restAdapter.setLogLevel(retrofit.RestAdapter.LogLevel.NONE);
+			restAdapter.setLogLevel(retrofit.RestAdapter.LogLevel.NONE);
 			break;
 		case BASIC:
-			this.restAdapter.setLogLevel(retrofit.RestAdapter.LogLevel.BASIC);
+			restAdapter.setLogLevel(retrofit.RestAdapter.LogLevel.BASIC);
 			break;
 		case HEADERS:
-			this.restAdapter.setLogLevel(retrofit.RestAdapter.LogLevel.HEADERS);
+			restAdapter.setLogLevel(retrofit.RestAdapter.LogLevel.HEADERS);
 			break;
 		case FULL:
-			this.restAdapter.setLogLevel(retrofit.RestAdapter.LogLevel.FULL);
+			restAdapter.setLogLevel(retrofit.RestAdapter.LogLevel.FULL);
 			break;
 		default:
 			break;
@@ -89,33 +90,32 @@ public class InfluxDBImpl implements InfluxDB {
 
 	@Override
 	public InfluxDB enableBatch(final int actions, final int flushDuration, final TimeUnit flushDurationTimeUnit) {
-		if (this.batchEnabled.get()) {
+		if (batchEnabled.get()) {
 			throw new IllegalArgumentException("BatchProcessing is already enabled.");
 		}
-		this.batchProcessor = BatchProcessor
+		batchProcessor = BatchProcessor
 				.builder(this)
 				.actions(actions)
 				.interval(flushDuration, flushDurationTimeUnit)
 				.build();
-		this.batchEnabled.set(true);
+		batchEnabled.set(true);
 		return this;
 	}
 
 	@Override
 	public void disableBatch() {
-		this.batchEnabled.set(false);
-		this.batchProcessor.flush();
-		if (this.logLevel != LogLevel.NONE) {
-			System.out.println(
-					"total writes:" + this.writeCount.get() + " unbatched:" + this.unBatchedCount.get() + "batchPoints:"
-							+ this.batchedCount);
+		batchEnabled.set(false);
+		batchProcessor.flush();
+		if (logLevel != LogLevel.NONE) {
+			System.out.println(String.format("Total writes:%d Unbatched:%d Batched:%d",
+					writeCount.get(), unBatchedCount.get(), batchedCount.get()));
 		}
 	}
 
 	@Override
 	public Pong ping() {
 		Stopwatch watch = Stopwatch.createStarted();
-		Response response = this.influxDBService.ping();
+		Response response = influxDBService.ping();
 		List<Header> headers = response.getHeaders();
 		String version = "unknown";
 		for (Header header : headers) {
@@ -136,31 +136,51 @@ public class InfluxDBImpl implements InfluxDB {
 
 	@Override
 	public void write(final String database, final String retentionPolicy, final Point point) {
-		if (this.batchEnabled.get()) {
-			BatchEntry batchEntry = new BatchEntry(point, database, retentionPolicy);
-			this.batchProcessor.put(batchEntry);
-		} else {
-			BatchPoints batchPoints = BatchPoints.database(database).retentionPolicy(retentionPolicy).build();
-			batchPoints.point(point);
-			this.write(batchPoints);
-			this.unBatchedCount.incrementAndGet();
-		}
-		this.writeCount.incrementAndGet();
+		write(database, retentionPolicy, point);
 	}
 
 	@Override
-	public void write(final BatchPoints batchPoints) {
-		this.batchedCount.addAndGet(batchPoints.getPoints().size());
-		TypedString lineProtocol = new TypedString(batchPoints.lineProtocol());
-		this.influxDBService.writePoints(
-				this.username,
-				this.password,
-				batchPoints.getDatabase(),
-				batchPoints.getRetentionPolicy(),
-				TimeUtil.toTimePrecision(TimeUnit.NANOSECONDS),
-				batchPoints.getConsistency().value(),
-				lineProtocol);
+	public void write(final String database, final String retentionPolicy, final ConsistencyLevel consistencyLevel, final Point point) {
+		if (batchEnabled.get()) {
+			BatchEntry batchEntry = new BatchEntry(point, database, consistencyLevel, retentionPolicy);
+			batchProcessor.put(batchEntry);
+		} else {
+			writeUnbatched(database, retentionPolicy, ConsistencyLevel.ONE, point);
+		}
+	}
+	
+	@Override
+	public void write(BatchPoints batchPoints) {
+		write(batchPoints.getDatabase(), batchPoints.getRetentionPolicy(), ConsistencyLevel.ONE, batchPoints.getPoints());
+	}
+	
+	@Override
+	public void write(final String database, final String retentionPolicy, final ConsistencyLevel consistencyLevel, final List<Point> points) {
+		writeBatched(database, retentionPolicy, consistencyLevel, points);
+	}
+	
+	protected void writeBatched(final String database, final String retentionPolicy, final ConsistencyLevel consistencyLevel, final List<Point> points) {
+		batchedCount.addAndGet(points.size());
+		writeCount.addAndGet(points.size());
+		writeLine(database, retentionPolicy, consistencyLevel, Point.toLineProtocol(points));
+	}
 
+	protected void writeUnbatched(String database, String retentionPolicy, ConsistencyLevel consistencyLevel, Point point) {
+		unBatchedCount.incrementAndGet();
+		writeCount.incrementAndGet();
+		writeLine(database, retentionPolicy, consistencyLevel, point.lineProtocol());
+	}
+	
+	private void writeLine(String database, String retentionPolicy, ConsistencyLevel consistency, String line) {
+		TypedString lineProtocol = new TypedString(line);
+		influxDBService.writePoints(
+				username,
+				password,
+				database,
+				retentionPolicy,
+				TimeUtil.toTimePrecision(TimeUnit.NANOSECONDS),
+				consistency.value(),
+				lineProtocol);
 	}
 
 	/**
@@ -168,8 +188,8 @@ public class InfluxDBImpl implements InfluxDB {
 	 */
 	@Override
 	public QueryResult query(final Query query) {
-		QueryResult response = this.influxDBService
-				.query(this.username, this.password, query.getDatabase(), query.getCommand());
+		QueryResult response = influxDBService
+				.query(username, password, query.getDatabase(), query.getCommand());
 		return response;
 	}
 
@@ -178,8 +198,8 @@ public class InfluxDBImpl implements InfluxDB {
 	 */
 	@Override
 	public QueryResult query(final Query query, final TimeUnit timeUnit) {
-		QueryResult response = this.influxDBService
-				.query(this.username, this.password, query.getDatabase(), TimeUtil.toTimePrecision(timeUnit) , query.getCommand());
+		QueryResult response = influxDBService
+				.query(username, password, query.getDatabase(), TimeUtil.toTimePrecision(timeUnit) , query.getCommand());
 		return response;
 	}
 	
@@ -189,7 +209,7 @@ public class InfluxDBImpl implements InfluxDB {
 	@Override
 	public void createDatabase(final String name) {
 		Preconditions.checkArgument(!name.contains("-"), "Databasename cant contain -");
-		this.influxDBService.query(this.username, this.password, "CREATE DATABASE " + name);
+		influxDBService.query(username, password, "CREATE DATABASE " + name);
 	}
 
 	/**
@@ -197,7 +217,7 @@ public class InfluxDBImpl implements InfluxDB {
 	 */
 	@Override
 	public void deleteDatabase(final String name) {
-		this.influxDBService.query(this.username, this.password, "DROP DATABASE " + name);
+		influxDBService.query(username, password, "DROP DATABASE " + name);
 	}
 
 	/**
@@ -205,7 +225,7 @@ public class InfluxDBImpl implements InfluxDB {
 	 */
 	@Override
 	public List<String> describeDatabases() {
-		QueryResult result = this.influxDBService.query(this.username, this.password, "SHOW DATABASES");
+		QueryResult result = influxDBService.query(username, password, "SHOW DATABASES");
 		// {"results":[{"series":[{"name":"databases","columns":["name"],"values":[["mydb"]]}]}]}
 		// Series [name=databases, columns=[name], values=[[mydb], [unittest_1433605300968]]]
 		List<List<Object>> databaseNames = result.getResults().get(0).getSeries().get(0).getValues();
