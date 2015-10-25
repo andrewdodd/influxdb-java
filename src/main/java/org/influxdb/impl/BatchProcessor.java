@@ -277,16 +277,16 @@ public class BatchProcessor {
 	
 	private class FlushIntervalRunnable implements Runnable {
 		public void run() {
-			logger.debug("Flush interval commenced");
+			logger.trace("Flush interval commenced");
 			WriteResult result = attemptWrite();
 			
 			switch (result){
 			case FAILED:
-				logger.debug("Flush interval - FAILED");
+				logger.trace("Flush interval - FAILED");
 				flushInterval = Math.min(flushInterval * BACKOFF_EXPONENT, flushIntervalMax);
 				break;
 			case NOT_ATTEMPTED:
-				logger.debug("Flush interval - NOT ATTEMPTED");
+				logger.trace("Flush interval - NOT ATTEMPTED");
 				break;
 			case SUCCESSFUL:
 				logger.debug("Flush interval - SUCCESS");
@@ -316,21 +316,21 @@ public class BatchProcessor {
 	
 	WriteResult attemptWrite() {
 		if (writeInProgressLock.compareAndSet(false, true)) {
-			logger.debug("Attempting to write");
+			logger.trace("Attempting to write");
 			boolean success = write();
 			writeInProgressLock.set(false);
 			
 			return success ? WriteResult.SUCCESSFUL: WriteResult.FAILED;
 		}
 
-		logger.debug("Write already in progress, not attempting");
+		logger.trace("Write already in progress, not attempting");
 		return WriteResult.NOT_ATTEMPTED;
 	}
 	
 	void writeNow() {
 		// If there is no write in progress, schedule an immediate write
 		if (!writeInProgressLock.get()) {
-			logger.debug("Write NOT already in progress, scheduling WriteRunnable");
+			logger.trace("Write NOT already in progress, scheduling WriteRunnable");
 			scheduler.execute(new WriteRunnable());
 		}
 	}
@@ -349,7 +349,6 @@ public class BatchProcessor {
 
 		// Map the writeList by the common (and hence batchable) fields
 		Map<BatchCommonFields, ArrayList<BatchEntry>> databaseToBatchPoints = Maps.newHashMap();
-
 		for (BatchEntry batchEntry : writeList) {
 			BatchCommonFields common = BatchCommonFields.fromEntry(batchEntry);
 
@@ -375,7 +374,7 @@ public class BatchProcessor {
 				influxDB.writeBatched(common.database, common.retentionPolicy, common.consistencyLevel, points);
 				writeList.removeAll(batchEntries);
 			} catch (Exception e) {
-				// TODO: we should probably include some logging here
+				logger.warn("Unable to write buffered points");
 			}
 		}
 
@@ -442,11 +441,11 @@ public class BatchProcessor {
 		throw new UnsupportedOperationException("Behaviour not yet supported");
 		}
 
-		logger.debug("Queue size:{}", queue.size());
+		logger.trace("Queue size:{} WriteList size:{} Total:{}", queue.size(), writeList.size(), queue.size() + writeList.size());
 
 		if (!waitForFlushIntervalToWriteLock.get()) {
 			if (queue.size() >= flushActions) {
-				logger.debug("No flush lock - Queue size[{}] actions[{}]", queue.size(), flushActions);
+				logger.trace("No flush lock - Queue size[{}] actions[{}]", queue.size(), flushActions);
 				writeNow();
 			}
 		}
