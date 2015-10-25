@@ -9,8 +9,10 @@ import org.influxdb.dto.QueryResult.Result;
 import org.influxdb.dto.QueryResult.Series;
 import org.joda.time.DateTime;
 
+import com.google.common.base.Objects;
+
 public class Diagnostics {
-	private Map<String, Object> system = new HashMap<>();
+	private Map<String, Object> system = new HashMap<String, Object>();
 //	private Map<String, Object> build = new HashMap<>();
 //	private Map<String, Object> runtime = new HashMap<>();
 	
@@ -22,18 +24,8 @@ public class Diagnostics {
 		Diagnostics diagnostics = new Diagnostics();
 		for (Result result: queryResult.getResults()) {
 			for (Series series: result.getSeries()){
-				switch (series.getName()) {
-				case "system":
+				if (Objects.equal("system", series.getName())) {
 					diagnostics.system = flattenFromValues(series.getColumns(), series.getValues().get(0));
-					break;
-//				case "build":
-//					diagnostics.build = flattenFromValues(series.getColumns(), series.getValues().get(0));
-//					break;
-//				case "runtime":
-//					diagnostics.runtime = flattenFromValues(series.getColumns(), series.getValues().get(0));
-//					break;
-				default:
-					break;
 				}
 			}
 		}
@@ -41,7 +33,7 @@ public class Diagnostics {
 		return diagnostics;
 	}
 	private static Map<String, Object> flattenFromValues(List<String> columns, List<Object> values) {
-		Map<String, Object> flattened = new HashMap<>();
+		Map<String, Object> flattened = new HashMap<String, Object>();
 		
 		for (int i = 0; i < columns.size(); i++) {
 			String column = columns.get(i);
