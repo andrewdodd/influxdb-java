@@ -289,4 +289,12 @@ public interface InfluxDB {
 	 */
 	public Optional<Point> peekFirstBuffered();
 
+	/**
+	 * Make a synchronous call to obtain and process the 'current' system
+	 * diagnostics (i.e. "SHOW DIAGNOSTICS").
+	 * 
+	 * @return a Diagnostics object with the supported fields
+	 */
+	public Diagnostics getDiagnostics();
+
 }
