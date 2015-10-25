@@ -5,6 +5,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.influxdb.Diagnostics;
 import org.influxdb.InfluxDB;
 import org.influxdb.dto.BatchPoints;
 import org.influxdb.dto.Point;
@@ -12,6 +13,8 @@ import org.influxdb.dto.Pong;
 import org.influxdb.dto.Query;
 import org.influxdb.dto.QueryResult;
 import org.influxdb.impl.BatchProcessor.BatchEntry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Stopwatch;
@@ -32,6 +35,8 @@ import retrofit.mime.TypedString;
  * 
  */
 public class InfluxDBImpl implements InfluxDB {
+	private static final Logger logger = LoggerFactory.getLogger(BatchProcessor.class);
+
 	private final String username;
 	private final String password;
 	private final RestAdapter restAdapter;
@@ -237,5 +242,11 @@ public class InfluxDBImpl implements InfluxDB {
 		}
 		return databases;
 	}
-
+	
+	public Diagnostics getDiagnostics() {
+		QueryResult queryResult = influxDBService.query(username, password, "SHOW DIAGNOSTICS");
+		logger.debug("Diagnostics: {}", queryResult);
+		Diagnostics diagnostics = Diagnostics.fromQueryResult(queryResult);
+		return diagnostics;
+	}
 }

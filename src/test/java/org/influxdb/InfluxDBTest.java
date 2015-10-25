@@ -11,6 +11,7 @@ import org.influxdb.dto.Point;
 import org.influxdb.dto.Pong;
 import org.influxdb.dto.Query;
 import org.influxdb.dto.QueryResult;
+import org.joda.time.DateTime;
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
@@ -187,4 +188,15 @@ public class InfluxDBTest {
 		Assert.assertFalse(result.getResults().get(0).getSeries().get(0).getTags().isEmpty());
 		influxDB.deleteDatabase(dbName);
 	}
+	
+	
+	/**
+	 * Test that describe Databases works.
+	 */
+	@Test(enabled = true)
+	public void testGetInfluxTime() {
+		DateTime currentTime = influxDB.getDiagnostics().getCurrentTime();
+		Assert.assertNotNull(currentTime);
+	}
+	
 }
