@@ -372,7 +372,9 @@ public class BatchProcessor extends AbstractScheduledService {
 				influxDB.writeBatched(common.database, common.retentionPolicy, common.consistencyLevel, points);
 				writeList.removeAll(batchEntries);
 			} catch (Exception e) {
-				logger.warn("Unable to write buffered points");
+				if (!logger.isTraceEnabled()) {
+					logger.warn("Unable to write buffered points");					
+				}
 				logger.trace("Unable to write buffered points", e);
 			}
 		}
