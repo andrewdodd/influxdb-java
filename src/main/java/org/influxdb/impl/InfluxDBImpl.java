@@ -122,6 +122,8 @@ public class InfluxDBImpl implements InfluxDB {
 				.discardOnFailedWrite(discardOnFailedWrite)
 				.maxBatchWriteSize(maxBatchWriteSize)
 				.build();
+		batchProcessor.startAsync();
+		batchProcessor.awaitRunning();
 		batchEnabled.set(true);
 		return this;
 	}
@@ -152,7 +154,8 @@ public class InfluxDBImpl implements InfluxDB {
 	@Override
 	public void disableBatch() {
 		batchEnabled.set(false);
-		batchProcessor.flush();
+		batchProcessor.stopAsync();
+		batchProcessor.awaitTerminated();
 		if (logLevel != LogLevel.NONE) {
 			System.out.println(String.format("Total writes:%d Unbatched:%d Batched:%d",
 					writeCount.get(), unBatchedCount.get(), batchedCount.get()));

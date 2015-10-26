@@ -5,9 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.concurrent.BlockingDeque;
-import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingDeque;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -24,6 +22,7 @@ import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
+import com.google.common.util.concurrent.AbstractScheduledService;
 
 /**
  * A BatchProcessor can be attached to a InfluxDB Instance to collect single point writes and
@@ -32,7 +31,7 @@ import com.google.common.collect.Maps;
  * @author stefan.majer [at] gmail.com
  *
  */
-public class BatchProcessor {
+public class BatchProcessor extends AbstractScheduledService {
 	private static final Logger logger = LoggerFactory.getLogger(BatchProcessor.class);
 	public static final int DEFAULT_ACTIONS = 10;
 	public static final int DEFAULT_FLUSH_INTERVAL_MIN = 1000;
@@ -43,7 +42,7 @@ public class BatchProcessor {
 	private static final int BACKOFF_EXPONENT = 2;
 	
 	protected final BlockingDeque<BatchEntry> queue;
-	private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+//	private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 	private final InfluxDBImpl influxDB;
 	private final int flushActions;
 	private final TimeUnit flushIntervalUnit;
@@ -55,7 +54,7 @@ public class BatchProcessor {
 	private final int maxBatchWriteSize;
 
 	private final AtomicBoolean writeInProgressLock = new AtomicBoolean(false);
-	private final AtomicBoolean waitForFlushIntervalToWriteLock = new AtomicBoolean(false);
+//	private final AtomicBoolean waitForFlushIntervalToWriteLock = new AtomicBoolean(false);
 
 	private final Object queueLock = new Object();
 	private final ArrayList<BatchEntry> writeList;
@@ -265,47 +264,40 @@ public class BatchProcessor {
 		} else {
 			queue = new LinkedBlockingDeque<BatchEntry>();
 		}
+	}
+	
+	@Override
+	protected void runOneIteration() throws Exception {
+		logger.trace("runOneIteration");
+		WriteResult result = attemptWrite();
 		
-		// Flush at specified Rate
-		scheduleNextFlush();
+		switch (result){
+		case FAILED:
+			logger.trace("runOneIteration - FAILED");
+			flushInterval = Math.min(flushInterval * BACKOFF_EXPONENT, flushIntervalMax);
+			break;
+		case NOT_ATTEMPTED:
+			logger.trace("runOneIteration - NOT ATTEMPTED");
+			break;
+		case SUCCESSFUL:
+			logger.debug("runOneIteration - SUCCESS");
+			flushInterval = flushIntervalMin;
+//			waitForFlushIntervalToWriteLock.set(false);
+			break;
+		default:
+			throw new RuntimeException("Unhandled WriteResult enum value:" + result);
+		}
+		
 	}
-	
-	private void scheduleNextFlush() {
-		logger.debug("scheduling next flush for {} {}", flushInterval, flushIntervalUnit);
-		scheduler.schedule(new FlushIntervalRunnable(), flushInterval, flushIntervalUnit);
-	}
-	
-	private class FlushIntervalRunnable implements Runnable {
-		public void run() {
-			logger.trace("Flush interval commenced");
-			WriteResult result = attemptWrite();
-			
-			switch (result){
-			case FAILED:
-				logger.trace("Flush interval - FAILED");
-				flushInterval = Math.min(flushInterval * BACKOFF_EXPONENT, flushIntervalMax);
-				break;
-			case NOT_ATTEMPTED:
-				logger.trace("Flush interval - NOT ATTEMPTED");
-				break;
-			case SUCCESSFUL:
-				logger.debug("Flush interval - SUCCESS");
-				flushInterval = flushIntervalMin;
-				waitForFlushIntervalToWriteLock.set(false);
-				break;
-			default:
-				throw new RuntimeException("Unhandled WriteResult enum value:" + result);
+
+	@Override
+	protected Scheduler scheduler() {
+		return new AbstractScheduledService.CustomScheduler() {
+			@Override
+			protected Schedule getNextSchedule() throws Exception {
+				return new Schedule(flushInterval, flushIntervalUnit);
 			}
-			
-			scheduleNextFlush();
-		}
-	}
-	
-	private class WriteRunnable implements Runnable{
-		@Override
-		public void run() {
-			attemptWrite();
-		}
+		};
 	}
 	
 	enum WriteResult {
@@ -317,10 +309,16 @@ public class BatchProcessor {
 	WriteResult attemptWrite() {
 		if (writeInProgressLock.compareAndSet(false, true)) {
 			logger.trace("Attempting to write");
-			boolean success = write();
-			writeInProgressLock.set(false);
+			try {
+				boolean success = write();
+				return success ? WriteResult.SUCCESSFUL: WriteResult.FAILED;
+			} catch(RuntimeException e) {
+				logger.warn("Runtime exception while writing", e);
+			} finally {
+				writeInProgressLock.set(false);
+			}
 			
-			return success ? WriteResult.SUCCESSFUL: WriteResult.FAILED;
+			return WriteResult.FAILED;
 		}
 
 		logger.trace("Write already in progress, not attempting");
@@ -328,11 +326,11 @@ public class BatchProcessor {
 	}
 	
 	void writeNow() {
-		// If there is no write in progress, schedule an immediate write
-		if (!writeInProgressLock.get()) {
-			logger.trace("Write NOT already in progress, scheduling WriteRunnable");
-			scheduler.execute(new WriteRunnable());
-		}
+//		// If there is no write in progress, schedule an immediate write
+//		if (!writeInProgressLock.get()) {
+//			logger.trace("Write NOT already in progress, scheduling WriteRunnable");
+//			scheduler.execute(new WriteRunnable());
+//		}
 	}
 
 	boolean write() {
@@ -375,6 +373,7 @@ public class BatchProcessor {
 				writeList.removeAll(batchEntries);
 			} catch (Exception e) {
 				logger.warn("Unable to write buffered points");
+				logger.trace("Unable to write buffered points", e);
 			}
 		}
 
@@ -398,7 +397,7 @@ public class BatchProcessor {
 							break;
 						}
 					}
-					waitForFlushIntervalToWriteLock.set(true);
+//					waitForFlushIntervalToWriteLock.set(true);
 				}
 				writeList.clear();
 			}
@@ -443,12 +442,12 @@ public class BatchProcessor {
 
 		logger.trace("Queue size:{} WriteList size:{} Total:{}", queue.size(), writeList.size(), queue.size() + writeList.size());
 
-		if (!waitForFlushIntervalToWriteLock.get()) {
-			if (queue.size() >= flushActions) {
-				logger.trace("No flush lock - Queue size[{}] actions[{}]", queue.size(), flushActions);
-				writeNow();
-			}
-		}
+//		if (!waitForFlushIntervalToWriteLock.get()) {
+//			if (queue.size() >= flushActions) {
+//				logger.trace("No flush lock - Queue size[{}] actions[{}]", queue.size(), flushActions);
+//				writeNow();
+//			}
+//		}
 
 		return added;
 	}
@@ -464,14 +463,19 @@ public class BatchProcessor {
 		}
 	}
 
+	@Override
+	protected void shutDown() throws Exception {
+		super.shutDown();
+		flush();
+	}
+	
 	/**
 	 * Flush the current open writes to influxdb and end stop the reaper thread.
 	 * This should only be called if no batch processing is needed anymore.
 	 *
 	 */
-	void flush() {
+	private void flush() {
 		write();
-		scheduler.shutdown();
 	}
 
 	private static class BatchCommonFields {
