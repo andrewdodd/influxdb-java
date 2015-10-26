@@ -5,6 +5,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.apache.http.impl.client.HttpClientBuilder;
+import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 import org.influxdb.Diagnostics;
 import org.influxdb.InfluxDB;
 import org.influxdb.dto.BatchPoints;
@@ -19,13 +21,11 @@ import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.Lists;
-import com.squareup.okhttp.OkHttpClient;
 
 import retrofit.RestAdapter;
 import retrofit.client.ApacheClient;
 import retrofit.client.Client;
 import retrofit.client.Header;
-import retrofit.client.OkClient;
 import retrofit.client.Response;
 import retrofit.mime.TypedString;
 
@@ -63,7 +63,11 @@ public class InfluxDBImpl implements InfluxDB {
 		super();
 		this.username = username;
 		this.password = password;
-		Client client = new ApacheClient();
+		
+		HttpClientBuilder builder = HttpClientBuilder.create();
+		builder.setConnectionManager(new PoolingHttpClientConnectionManager());
+		Client client = new ApacheClient(builder.build());
+		
 		restAdapter = new RestAdapter.Builder()
 				.setEndpoint(url)
 				.setErrorHandler(new InfluxDBErrorHandler())
